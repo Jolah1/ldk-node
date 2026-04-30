@@ -1585,6 +1585,44 @@ where
 			} => {
 				log_info!(self.logger, "Channel {} closed due to: {}", channel_id, reason);
 
+				// If the counterparty initiated closure of their last remaining channel
+				// with us, remove them from the peer store so we stop trying to reconnect.
+				//
+				// If we initiated the closure, keep them in the peer store so the
+				// background reconnection task fires and we can complete the
+				// channel_reestablish recovery flow. This matters especially for LND
+				// peers, which need us to reconnect to recover from force-closures.
+				//
+				// We exclude `channel_id` from the remaining-channel check because LDK
+				// fires ChannelClosed before removing the channel from its internal list,
+				// so list_channels_with_counterparty still includes the closing channel.
+				if let Some(counterparty_node_id) = counterparty_node_id {
+					let counterparty_initiated = matches!(
+						reason,
+						ClosureReason::CounterpartyForceClosed { .. }
+							| ClosureReason::CounterpartyInitiatedCooperativeClosure
+					);
+
+					if counterparty_initiated {
+						let has_other_channels = self
+							.channel_manager
+							.list_channels_with_counterparty(&counterparty_node_id)
+							.iter()
+							.any(|c| c.channel_id != channel_id);
+
+						if !has_other_channels {
+							if let Err(e) = self.peer_store.remove_peer(&counterparty_node_id) {
+								log_error!(
+									self.logger,
+									"Failed to remove peer {} from peer store: {}",
+									counterparty_node_id,
+									e
+								);
+							}
+						}
+					}
+				}
+
 				let event = Event::ChannelClosed {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
