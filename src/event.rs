@@ -1613,6 +1613,7 @@ where
 									counterparty_node_id,
 									e
 								);
+								return Err(ReplayEvent());
 							}
 						}
 					}
